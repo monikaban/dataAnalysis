@@ -1,0 +1,482 @@
+---
+title: "Retail Sales Analysis"
+author: "Monika Bansal"
+date: "8/31/2018"
+output:
+  html_document: default
+  pdf_document: default
+  word_document: default
+---
+
+### Research Objective 
+
+The objective of this study is to perform customer data analysis on retail transactional data from a webstore. Customers can be international, located in different geographies.
+
+Idea is to address 3 set of problems
+
+1.	Exploratory analysis of online business sales data, to identify commonly selling products, top profitable products and return transactions. Also identify geographic locations that are producing most sales. 
+
+2.	Perform customer segmentation using RFM Analysis, to find highly valued customers and churning group of customers. This would help organization in addressing different sales campaign for loyal customers (offer more discounts) and bad customers (less discount)
+
+3.	Predict future sales using Linear Regression Model and evaluate the model’s predictive power on test data.
+
+### Data source 
+
+For this study I choose sales transactions for a British online retail shopping website from UCI (Univ of California-Irvine) machine learning repository:
+http://archive.ics.uci.edu/ml/datasets/online+retail
+
+This transactional data set contains all the transactions occurring between 01/12/2010 and 09/12/2011 for a UK-based and registered non-store online retail. The company mainly sells unique all-occasion gifts. Many customers of the company are wholesalers.
+Products consists of gift items like lanterns, light holders, coat hanger, school supply items, lunch bags, postages etc.
+
+Dataset is Multivariate, Sequential, Time Series data 
+Total records : 541909  ( 8 attributes)
+
+### Attributes
+
+**InvoiceNo:** Invoice number. Nominal, a 6-digit integral number uniquely assigned to each transaction. If this code starts with letter 'c', it indicates a cancellation.    
+**StockCode:** Product (item) code. Nominal, a 5-digit integral number uniquely assigned to each distinct product.   
+**Description:** Product (item) name. Nominal.   
+**Quantity:** The quantities of each product (item) per transaction. Discrete/ Numeric.   
+**InvoiceDate:** Invoice Date and time. Numeric, the day and time when each transaction was generated.   
+**UnitPrice:** Unit price. Continuous/Numeric, Product price per unit in sterling.   
+**CustomerID:** Customer number. Nominal, a 5-digit integral number uniquely assigned to each customer.   
+**Country:** Country name. Nominal, the name of the country where each customer resides.  
+
+### RFM Analysis
+
+RFM Analysis is a popular type of marketing analysis technique, which depends on 3 attributes  
+**R** - recency (the date of a customer’s most recent purchase),   
+**F** - frequency (how often the customer purchases) and   
+**M** - money (how much the customer spends).  
+
+Recency is the most important factor because the more recently a customer has bought, the more likely he will again. And customers who buy more frequently are more likely to again, as are customers who spend more.  
+
+The RFM scores are calculated for each customer. Also, a weightage is defined for each R, F and M attributes, while calculating the final scores. The data is then divided into quantiles (fifths) for each variable (R, F, and M), and assigned a score from 1 (lowest 20 percent) through 5 (highest 20 percent) to each customer for R, for F, and for M.
+
+I used findRFM() function in didrooRFM package for RFM Analysis and deriving customer classification in scale of 1- 5. I assumed, retail business has equal priority for each R, F and M attribute. So equal weightages are assigned (4) for each R,F and M attribute.
+
+Please refer below link for complete details on didrooRFM package  
+https://github.com/didroo55/didrooPackages/blob/master/didrooRFM.pdf
+
+
+### Packages used
+
+```{r}
+library("dplyr")
+library("ggplot2")
+library("corrplot") # for Corelation Matrix plot
+library("didrooRFM") # for RFM analysis
+library("foreign") # for linear modeling
+library("lubridate") # for month(), year()
+library("RColorBrewer") # for pie chart color
+```
+
+### Load Sales data
+
+```{r}
+sales <- readxl::read_xlsx("/Users/monikabansal/ucsc/DataAnalysis/project/data/Online Retail.xlsx")
+dim(sales)
+head(sales)
+summary(sales)
+```
+
+### Data Preparation
+
+1) The function findRFM() requires sales amount, instead of Quantity and Unit Price. So we need to add a new 'Amount' column 
+
+```{r}
+# 1) Adding new column for Sales Amount 
+sales <- mutate(sales, Amount = Quantity * UnitPrice)
+
+select(sales, Quantity, UnitPrice, Amount)
+```
+
+2) The function findRFM() requires a data frame that has Invoice Number, Customer ID, Invoice Date, and Amount (in that order). And each row should have unique Invoice Number for a sales transaction. To acheive this, we need to create dataframes in 2 parts and join them together.  
+
+a) The first part is a data frame that has a unique Invoice Number associated with the Customer ID and the Invoice Date. 
+
+b) In the sales data that is imported, we have each row representing a purchased item(invoice line item), that is part of the overall txn. There are many line item rows for each purchased item. So we need to aggregate all line items into one and get total Amount per Invoice Number.  
+
+c) Merge a) and b)
+```{r}
+
+# 2 a) Get 1 record per customer and his invoice
+invNoCust <-sales %>% 
+  group_by(InvoiceNo,CustomerID, InvoiceDate) %>%
+  select(InvoiceNo, CustomerID, InvoiceDate) %>%
+  summarise(count = n()) 
+head(invNoCust)
+dim(invNoCust)
+
+# 2 b) Aggregate amounts for all purchased items(invoice line item), that are part of the overall txn.
+invAmtAggr <-sales %>% 
+  group_by(InvoiceNo) %>%
+  summarise(invAmt = sum(Amount)) 
+head(invAmtAggr)
+
+# 2 c) Merge to create input data for findRFM()
+dataRFM = merge(invNoCust, invAmtAggr, by = "InvoiceNo")
+
+dataRFM <- select(dataRFM,InvoiceNo,CustomerID,InvoiceDate, Amount = invAmt)
+
+NROW(dataRFM)
+head(dataRFM)
+```
+
+3) Eliminating rows with NA
+```{r}
+dataRFM_wo_na <- na.omit(dataRFM)
+NROW(dataRFM_wo_na)
+```
+4) Change the date format
+```{r}
+dataRFM_wo_na <- mutate(dataRFM_wo_na, InvoiceDate = as.Date(dataRFM_wo_na$InvoiceDate, format="%m/%d/%Y"))
+head(dataRFM_wo_na)
+```
+
+### Exploratory Analysis
+#### 1) Data statistics
+
+```{r}
+# Count unique customers
+custs <- unique(sales$CustomerID)
+NROW(custs)
+```
+Total Customers (4373) , Total Products (5749) and Total Invoices (22,221)
+
+#### 2) Top 10 popular products 
+```{r}
+prods <- sales %>% 
+  group_by(StockCode, Description) %>%
+  summarise(prodCount = n()) %>%
+  arrange(desc(prodCount)) %>%
+  filter(prodCount > 1260) %>% ungroup()
+
+# Plot top 10 products
+topProds <- mutate(prods, prodCode = as.factor(Description))
+
+P <- ggplot(data = topProds, aes(x = reorder( prodCode, prodCount), y=prodCount, fill=prodCode )) + geom_bar(stat="identity", position="dodge",colour="black") + theme_bw() + theme(axis.text.x = element_text(angle=60, hjust=1),panel.grid.major.y = element_blank(),panel.grid.major.x = element_line(colour="grey60", linetype="dashed"))+ scale_fill_brewer(palette="Pastel1")
+P+xlab("Product Name")+ylab("Product Count")+ guides(fill = FALSE)
+```
+
+Top 10 Products, sold are having count between 1200 – 2500
+
+#### 3) Top 10 Products driving the Revenue
+```{r}
+prodsRev <- sales %>% 
+  group_by(StockCode, Description) %>%
+  summarise(salesAmt = sum(Amount)) %>%
+  arrange(desc(salesAmt)) %>%
+  filter(salesAmt > 50000) %>% ungroup()
+
+topProdsRev <- mutate(prodsRev, prodCode = as.factor(Description))
+
+P <- ggplot(data = topProdsRev, aes(x = reorder( prodCode, salesAmt), y=salesAmt, fill=prodCode )) + geom_bar(stat="identity", position="dodge",colour="black") + theme_bw() + theme(axis.text.x = element_text(angle=60, hjust=1),panel.grid.major.y = element_blank(),panel.grid.major.x = element_line(colour="grey60", linetype="dashed"))+ scale_fill_brewer(palette="Pastel1")
+P+xlab("Product Name")+ylab("Total Sales Amount") + guides(fill = FALSE)
+```
+
+#### 4) Plot line diagram for Total Sales Amount(Revenue) per month for last 2011 yr
+```{r}
+# Convert InvoiceDate to numeric date
+start2011 <- as.numeric(as.Date("2011-01-01"))
+dataRFM_dateNum <- mutate(dataRFM_wo_na, InvDateNum = as.numeric(dataRFM_wo_na$InvoiceDate) )
+dataRFM2011 <- dataRFM_dateNum %>% filter(InvDateNum > start2011)
+
+dataRFM_2011_mon <- mutate(dataRFM2011, InvMonth=month(dataRFM2011$InvoiceDate) )
+
+totSalesPerMonth <- dataRFM_2011_mon %>%
+        group_by(InvMonth) %>%
+        summarise(totalSalesAmount = sum(Amount)) %>%
+        arrange(InvMonth)
+
+P<-ggplot(totSalesPerMonth, aes(x=InvMonth, y=totalSalesAmount)) + geom_line() + geom_point()
+P+xlab("2011 Sales Invoice Month")+ylab("Total Sales Amount") + scale_x_continuous(breaks=c(1,2,3,4,5,6,7,8,9,10,11,12),labels=c("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"))
+
+# Plot line diagram for Total Sales Txns per month for last 2011 yr
+totTxnsPerMonth <- dataRFM_2011_mon %>%
+  group_by(InvMonth) %>%
+  summarise(totalSalesTxns = n()) %>%
+  arrange(InvMonth)
+
+P<-ggplot(totTxnsPerMonth, aes(x=InvMonth, y=totalSalesTxns)) + geom_line() + geom_point()
+P+xlab("2011 Sales Invoice Month")+ylab("Sales Transaction Count") + scale_x_continuous(breaks=c(1,2,3,4,5,6,7,8,9,10,11,12),labels=c("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"))
+```
+
+The down trend for Dec 2011 is due to insufficient data.
+
+#### 5) Plot month wise distribution of sales
+```{r}
+dataRFM_mon <- mutate(dataRFM_wo_na, InvMonth=month(dataRFM_wo_na$InvoiceDate) )
+
+P<-ggplot(dataRFM_mon, aes(x=InvMonth, y=Amount, colour=InvMonth)) + geom_point()
+P+xlab("Sales Invoice Month")+ylab("Sales Amount")+ylim(-3000,5000) + scale_x_continuous(breaks=c(1,2,3,4,5,6,7,8,9,10,11,12),labels=c("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"))
+```
+
+#### 6) Total distribution of Buys and Rejects over Time
+```{r}
+buys <- dataRFM_wo_na %>% filter(Amount > 0)
+NROW(buys)
+rejects <- dataRFM_wo_na %>% filter(Amount < 0)
+NROW(rejects)
+
+P<-ggplot(dataRFM_wo_na, aes(x=InvoiceDate, y=Amount, colour=InvoiceDate)) + geom_line()
+P+xlab("Sales Invoice Date")+ylab("Sales Amount")+ylim(-3000,5000)
+```
+
+19% of transactions are Returns  
+For Oct 2011, sales have more return transactions. Retail business owner should do return analysis, on what went wrong in the month of Oct. Also, they should contact their suppliers in advance and inform them about this trend and manage their customer services division.
+
+#### 7) Apply RFM Analysis 
+```{r}
+resultsRFM <- findRFM(dataRFM_wo_na, recencyWeight=4, frequencyWeight=4, monetoryWeight=4)
+dim(resultsRFM)
+head(resultsRFM)
+
+# Results showing R,F,M scores for each Customer and their Classes.
+head(resultsRFM[,c(1,8:10,16)])
+
+```
+
+findRFM() returns the Histogram of FinalWeightedScore. 
+Class 5 is the highest valued customer and Class 1 is the lowest value, which is churning group of customers.
+
+#### 8) Customer segmentation class distribution
+```{r}
+custClass <- table(resultsRFM$FinalCustomerClass)
+
+# Pie Chart with Percentages
+slices <- custClass
+lbls <- names(custClass)
+pct <- round(slices/sum(slices)*100)
+pielabels <- sprintf("%s = %3.0f%s", names(custClass),
+                     100*custClass/sum(custClass), "%")
+pie(slices,labels = lbls, col=rainbow(length(lbls)),
+    main="Percentage share of Customer Classes")
+legend("topleft",legend=pielabels,bty="n",
+       fill=brewer.pal(7,"Set1"))
+
+# bar graphs 
+barplot(custClass)
+```
+
+As you can see Class-5 customers are very rare (2%), and Class-2 are largest (33%) 
+
+#### 9) Box Plot with Class distribution
+```{r}
+# Box Plot
+P <- ggplot(resultsRFM, aes(x=LastTransaction, y=MeanValue, colour=FinalCustomerClass)) + geom_boxplot() #col="blue")#,size=2)
+P+ylab("Average Sales Amount")+xlab("Last Transaction Date")+ylim(-500,1500)
+```
+
+As seen, Class-5 customers are mostly doing higher amount transactions (500-750 pound). Median value of sales amount for Class-4 is lower than Class-5. Similarly, Class-3 median is higher than Class-2 and Class-1 is lower than Class-2    
+
+#### 10) Total Revenue distribution / month for 2011 yr
+```{r}
+# Merge with resultsRFM to get Class
+dataRFM_2011_mon_class = merge(dataRFM_2011_mon, resultsRFM, by = "CustomerID")
+
+totSalesPerMonthClass <- dataRFM_2011_mon_class %>%
+  group_by(FinalCustomerClass,InvMonth) %>%
+  summarise(totalSalesAmount = sum(Amount)) %>%
+  arrange(InvMonth)
+
+P<-ggplot(totSalesPerMonthClass, aes(x=InvMonth, y=totalSalesAmount, colour=FinalCustomerClass)) + geom_line() + geom_point()
+P+xlab("2011 Sales Invoice Month")+ylab("Sales Transaction Amount") #+ylim(-3000,5000)
+```
+
+We can see the sales are increasing over months for all classes (ignoring the dots for the last month). Class-1, customers are making low amount transactions, Class-2 and 3 are relatively better in spending. However, Class-4 customers are bringing more sales than Class-5, then why did we classify them at lower level ? Lets analyze this further. 
+
+
+#### 11) Combined Average Sales Amount Vs Last Transactions for all Class customers
+```{r}
+P<-ggplot(resultsRFM, aes(x=LastTransaction, y=MeanValue, colour=FinalCustomerClass)) + geom_point() 
+P+ylim(-200,2500) + xlab("Last Transaction Date")+ylab("Average Sales Amount")
+```
+
+This plot shows that there are lot more customers with transactions for Class-4 than Class-5. This explains why, the total sales graph is showing higher for Class-4 customers.
+
+#### 12) Customer demographics and Class distribution 
+
+To co-relate RFM data with the countries, we need to add Country into the resultsRFM, by joining it with original sales
+
+```{r}
+# Remove duplicated CustomerID rows in sales
+retail_nondup<- sales[!duplicated(sales$CustomerID),c(7,8)]
+head(retail_nondup)
+
+RFMCountry <-merge(resultsRFM[,c(1,8:10,16)],retail_nondup, by="CustomerID")
+locDist <- table(RFMCountry$Country,RFMCountry$FinalCustomerClass)
+locDist
+```
+
+For Visualization purpose, lets plot it by ignoring customer counts < 2 
+```{r}
+locDist2 <-RFMCountry %>% 
+  group_by(FinalCustomerClass,Country) %>%
+  summarise(count = n()) %>%
+  filter(count > 2)
+
+P <- ggplot(data = locDist2, aes(x = Country, y=count, fill=FinalCustomerClass )) + geom_bar(stat="identity", position="dodge",colour="black") + theme_bw() + theme(axis.text.x = element_text(angle=60, hjust=1),panel.grid.major.y = element_blank(),panel.grid.major.x = element_line(colour="grey60", linetype="dashed"))
+P+xlab("Country Location")+ylab("Customer Count")
+```
+
+As expected, most of the business comes from UK. The rest of Europe combines to provide a distant second. It's difficult to make any conclusions from the small non-UK samples, but a quick look shows that the classes seem to be distributed similarly throughout the countries. By adding post-2011 data we could shed some light on intercountry differences.
+
+### Predicting future Sales
+
+#### Correlation check on RFM results data
+```{r}
+resultsRFM2 <- mutate(resultsRFM, LastTransactionNum = as.numeric(LastTransaction))
+# Select relevant numeric columns
+resultsRFMn = select(resultsRFM2,2,4, 11:13,15,17)
+corRes = cor(resultsRFMn)
+corrplot(corRes, type='upper')
+```
+
+From this matrix, other than FinalWeightedScore, we cannot see any major correlations between Average Sales Amount, Number of transactions, R,F,M weighted scores and Last Transaction date. There is no relationship found between customers visiting frequently to the website, and those making Monetary transactions. However there could be relationship between Sales transaction date and Quantity of products sold. Lets examine this further by using Linear regression modelling
+
+#### Linear Regression Modeling
+
+##### 1)  Filter out data for most popularly sold item 'WHITE HANGING HEART T-LIGHT HOLDER'
+
+```{r}
+# T-Light Holder products data
+lHolderProd = filter(sales, StockCode == "85123A")
+summary(lHolderProd$Quantity)
+# Box Plot
+boxplot(lHolderProd$Quantity)
+```
+
+##### 2) Since there is alot of variation between Min and Max values, lets remove outliers for T-light holder product data
+```{r}
+salesLH <- filter(lHolderProd, Quantity < 50, Quantity > -40)
+dim(salesLH)
+boxplot(salesLH$Quantity)
+```
+
+##### 3) Statistical Test - QQPlot Test
+```{r}
+# Change Invoice Date to numeric value
+salesLHNum <- mutate(salesLH, InvoiceDateNum = as.numeric(as.Date(InvoiceDate)))
+# qqPlot Test
+qqtest <- qqplot(salesLHNum$Quantity, salesLHNum$InvoiceDateNum)
+```
+
+QQPlot graph is approaching to straight line, we can say its normal distribution
+
+##### 4) Create the training (modeling) and test (validation) data samples from original data.
+ Take 80% samples for modeling  
+ Rest 20% samples for testing
+```{r}
+set.seed(100)
+trainingRowIndex <- sample(1:nrow(salesLH), 0.8*nrow(salesLH))  # row indices for training data
+trainingData <- salesLH[trainingRowIndex, ]  # training data
+testData  <- salesLH[-trainingRowIndex, ]   # test data
+
+dim(trainingData) 
+dim(testData) 
+```
+
+##### 5) Check the co-relation between input Sales Quantities, and output Invoice Date parameter
+```{r}
+# Change Invoice Date to numeric value
+trainDataNum <- mutate(trainingData, InvoiceDateNum = as.numeric(as.Date(InvoiceDate)))
+
+cc <- cor(trainDataNum$Quantity, trainDataNum$InvoiceDateNum)
+cc
+```
+There is a -0.05 co-relation found between Sales Quantity and Invoice Date
+
+##### 6) Build the Linear Regression Model with Quantity = f(InvoiceDateNum)
+```{r}
+# Build the model, with Quantity = f(InvoiceDateNum)
+SalesQtyModel <- lm(Quantity ~ InvoiceDateNum, data=trainDataNum)
+summary(SalesQtyModel)
+
+# Plot the Linear relationship model
+plot(trainDataNum$Quantity~trainDataNum$InvoiceDateNum, , xlab = "Sales Date", ylab = "Sales Quantity")
+abline(SalesQtyModel, col = 'red')
+grid()
+```
+
+As you can see the p-value for this model = 0.03118, which is less than 0.05. So we can reject the null hypothesis, and keep the coefficients as non zero. Our hypothesis of Sales Quantities are dependent upon Invoice Date is true.   
+Note: R squared value (which tells, how much change in output variable is explained by change in input variable) is quiet low, model is not good. This is obvious, as the degree of slope is very small in our case. We found out that output quantities are changing very little over time.
+
+Equation for the Linear model
+ *Quantity = 73.17* * *InvoiceDateNum -0.004254*
+
+There is slight negative co-relation found. Sales for Light holder product started lowering over a time period. The Retail business need to improve the quality of this product to keep up with the market competition
+
+##### 7) Predict a random Test case using this model
+```{r}
+# Lets predict the Quantities for a future date (for Light Holder product)
+futureDate <- data.frame(InvoiceDateNum = c(as.numeric(as.Date("2011-04-01"))))
+
+result <- predict(SalesQtyModel, futureDate, interval="confidence")
+result #   9
+plot(SalesQtyModel, which=1)
+plot(SalesQtyModel, which=2)
+```
+
+The Predicted value : 9.09. Actual value of average Quantities for 2011-04-01 is : 9.57. Predicted value is close to actual.
+
+##### 8) Evaluating Models Predictive Power (using Training and Test sets for T-Light Holder product)
+```{r}
+# Change Invoice Dates to numeric value in Training and Testsets
+trainDataNum <- mutate(trainingData, InvoiceDateNum = as.numeric(as.Date(InvoiceDate)))
+testDataNum  <-  mutate(testData, InvoiceDateNum = as.numeric(as.Date(InvoiceDate)))
+
+# Find out Linear Model's Prediction for entire Training and Test set  
+train_prediction <- predict(SalesQtyModel, data=trainDataNum, interval="confidence") 
+train_actual <- trainDataNum$Quantity
+test_prediction <- predict(SalesQtyModel, newdata=testDataNum, interval="confidence") 
+test_actual <- testDataNum$Quantity
+
+# Define Mean Square Error (MSE) Function
+mean_square_error <- function(pred=NULL, actual=NULL){ 
+  return(mean((pred-actual)^2))
+}
+# MSE on Training Set
+train_MSE <- mean_square_error(pred=train_prediction, actual=train_actual) 
+train_MSE
+
+# RMSE (Root MSE) on Training Set
+train_RMSE <- sqrt(train_MSE) 
+train_RMSE
+
+# MSE on Test Set
+test_MSE <- mean_square_error(pred=test_prediction, actual=test_actual) 
+test_MSE
+
+# RMSE on Test Set
+test_RMSE <- sqrt(test_MSE) 
+test_RMSE
+
+range(trainDataNum$Quantity)
+range(testDataNum$Quantity)
+```
+
+**Results :** If the MSE stays approximately the same from training set to test set, then the model generalizes well, and there is lower risk for over-fitting. As seen in our case MSE for Training 89.0 is close to Test 95.0. So the Model fits the data well. The results are good.
+
+### Conclusion
+
+After detailed analysis of data, commonly selling and profitable products were identified. There are 19% of return transactions and most of the customer are based out of UK.
+
+Customer segmentation using RFM analysis resulted in classifying customers to 5 group of classes. Highest ranked customers found to be 2% and 16% are potential churning group of customers.
+Churning customers are doing low volume transactions, they have not visited since last 3 months.
+Highest valued customers are low in number, doing high sales amount transactions.
+
+Predictions based on our Linear model are pretty good, with lower risk of over-fitting
+
+### Future Plan
+
+1)	Another approach for customer classification would be to use machine learning technique to discover segmentation patterns in the data. This can be achieved by using K-means clustering.
+2)	Statistical testing should be done to compare RFM classes with K-means clusters
+3)	Further analysis should be done to identify patterns for churning customers, like tracking their consecutive last transactions for few month and analyzing more on the product items they were using.
+
+### References
+1. R Projects  - Joseph Schmuller, PhD
+
+
+
+
